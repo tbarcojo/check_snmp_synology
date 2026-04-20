@@ -291,55 +291,70 @@ fi
 
 
     if [ "$checkType" = "fan" ] ; then
+        # Perfdata: 1=OK(Normal), 0=Failed — thresholds: warn at <1, crit at <1
+        fanPerfdata=""
+
         #Check system fan status
         if [ "$systemFanStatus" = "1" ] ; then
             systemFanStatus="Normal"
+            fanPerfdata="$fanPerfdata system_fan=1;1;1;0;1"
         else
-            systemFanStatus="Failed";
+            systemFanStatus="Failed"
             healthCriticalStatus=1
-            healthString="$healthString, System fan status: $systemFanStatus "
+            healthString="$healthString, System fan status: $systemFanStatus"
+            fanPerfdata="$fanPerfdata system_fan=0;1;1;0;1"
         fi
-
 
         #Check CPU fan status
         if [ "$CPUFanStatus" = "1" ] ; then
             CPUFanStatus="Normal"
+            fanPerfdata="$fanPerfdata cpu_fan=1;1;1;0;1"
         else
-            CPUFanStatus="Failed";
+            CPUFanStatus="Failed"
             healthCriticalStatus=1
-            healthString="$healthString, CPU fan status: $CPUFanStatus "
+            healthString="$healthString, CPU fan status: $CPUFanStatus"
+            fanPerfdata="$fanPerfdata cpu_fan=0;1;1;0;1"
         fi
     fi
 
 
     #Check all disk status
     if [ "$checkType" = "disk" ] ; then
+        diskPerfdata=""
         for i in `seq 1 $nbDisk`;
         do
-            diskID[$i]=$(echo "$syno" | grep "$OID_diskID.$(($i-1)) " | cut -d "=" -f2)
+            diskID[$i]=$(echo "$syno" | grep "$OID_diskID.$(($i-1)) " | cut -d "=" -f2 | sed 's/^[ \t]*//;s/[ \t]*$//' | tr -d '"')
             diskModel[$i]=$(echo "$syno" | grep "$OID_diskModel.$(($i-1)) " | cut -d "=" -f2 )
             diskStatus[$i]=$(echo "$syno" | grep "$OID_diskStatus.$(($i-1)) " | cut -d "=" -f2 | sed 's/^[ \t]*//;s/[ \t]*$//')
             diskTemp[$i]=$(echo "$syno" | grep "$OID_diskTemp.$(($i-1)) " | cut -d "=" -f2 | sed 's/^[ \t]*//;s/[ \t]*$//')
 
+            # Disk health perfdata: 1=OK, 0=Failed/Crashed
+            diskHealthVal=1
             case ${diskStatus[$i]} in
                     "1")diskStatus[$i]="Normal";;
                     "2")diskStatus[$i]="Initialized";;
                     "3")diskStatus[$i]="NotInitialized";;
-                    "4")diskStatus[$i]="SystemPartitionFailed";healthCriticalStatus=1; healthString="$healthString, problem with ${diskID[$i]} (model:${diskModel[$i]}) status:${diskStatus[$i]} temperature:${diskTemp[$i]}";;
-                    "5")diskStatus[$i]="Crashed";healthCriticalStatus=1;healthString="$healthString, problem with ${diskID[$i]} (model:${diskModel[$i]}) status:${diskStatus[$i]} temperature:${diskTemp[$i]}";;
+                    "4")diskStatus[$i]="SystemPartitionFailed";diskHealthVal=0;healthCriticalStatus=1;healthString="$healthString, problem with ${diskID[$i]} (model:${diskModel[$i]}) status:${diskStatus[$i]} temperature:${diskTemp[$i]}";;
+                    "5")diskStatus[$i]="Crashed";diskHealthVal=0;healthCriticalStatus=1;healthString="$healthString, problem with ${diskID[$i]} (model:${diskModel[$i]}) status:${diskStatus[$i]} temperature:${diskTemp[$i]}";;
             esac
 
-            if [ "${diskTemp[$i]}" -gt "$warningTemperature" ] ; then
-                if [ "${diskTemp[$i]}" -gt "$criticalTemperature" ] ; then
-                    diskTemp[$i]="${diskTemp[$i]} (CRITICAL)"
+            # Disk temperature perfdata
+            diskTempRaw=${diskTemp[$i]}
+            if [ "${diskTempRaw}" -gt "$warningTemperature" ] ; then
+                if [ "${diskTempRaw}" -gt "$criticalTemperature" ] ; then
+                    diskTemp[$i]="${diskTempRaw} (CRITICAL)"
                     healthCriticalStatus=1;
                     healthString="$healthString, ${diskID[$i]} temperature: ${diskTemp[$i]}"
                 else
-                    diskTemp[$i]="${diskTemp[$i]} (WARNING)"
+                    diskTemp[$i]="${diskTempRaw} (WARNING)"
                     healthWarningStatus=1;
                     healthString="$healthString, ${diskID[$i]} temperature: ${diskTemp[$i]}"
                 fi
             fi
+
+            # Build perfdata for this disk: health + temperature
+            diskLabel=$(echo "${diskID[$i]}" | sed 's/[^a-zA-Z0-9_]/_/g')
+            diskPerfdata="$diskPerfdata ${diskLabel}_health=${diskHealthVal};1;1;0;1 ${diskLabel}_temp=${diskTempRaw};${warningTemperature};${criticalTemperature};;"
        done
     fi
 
@@ -401,13 +416,13 @@ fi
                           echo "DSM update: $DSMUpgradeAvailable" ;;
         "temperature")    echo "Temperature: $temperature" ;;
         "power")  echo "Power Status: $powerStatus" ;;
-        "fan")            echo "System Fan Status: $systemFanStatus" ;
-                          echo "CPU Fan Status: $CPUFanStatus" ;;
-        "disk")           echo "Number of disks:         $nbDisk" ;
+        "fan")            echo "System Fan Status: $systemFanStatus - CPU Fan Status: $CPUFanStatus | $fanPerfdata" ;;
+        "disk")           echo "Number of disks: $nbDisk" ;
                           for i in `seq 1 $nbDisk`;
                           do
                               echo " ${diskID[$i]} (model:${diskModel[$i]}) status:${diskStatus[$i]} temperature:${diskTemp[$i]}" ;
-                              done ;;
+                          done
+                          echo "| $diskPerfdata" ;;
         "raid")           echo "Number of RAID volume:   $nbRAID" ;
                           for i in `seq 1 $nbRAID`;
                           do
